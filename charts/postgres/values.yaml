@@ -1,0 +1,5 @@
+postgres:
+  user: user
+  password: password
+  db: telegram_posts
+  storage: 5Gi
