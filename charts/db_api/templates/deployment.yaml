@@ -1,0 +1,39 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "db-api.fullname" . }}
+  labels:
+    app: {{ include "db-api.name" . }}
+spec:
+  replicas: {{ .Values.replicaCount }}
+  selector:
+    matchLabels:
+      app: {{ include "db-api.name" . }}
+  template:
+    metadata:
+      labels:
+        app: {{ include "db-api.name" . }}
+    spec:
+      containers:
+        - name: db-api
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          ports:
+            - containerPort: 8080
+          env:
+            - name: POSTGRES_HOST
+              value: {{ .Values.env.POSTGRES_HOST | quote }}
+            - name: POSTGRES_PORT
+              value: {{ .Values.env.POSTGRES_PORT | quote }}
+            - name: POSTGRES_DB
+              value: {{ .Values.env.POSTGRES_DB | quote }}
+            - name: POSTGRES_USER
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "db-api.fullname" . }}-secret
+                  key: POSTGRES_USER
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "db-api.fullname" . }}-secret
+                  key: POSTGRES_PASSWORD

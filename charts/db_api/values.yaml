@@ -1,0 +1,19 @@
+replicaCount: 1
+
+image:
+  repository: db-api
+  tag: latest
+  pullPolicy: IfNotPresent
+
+service:
+  type: ClusterIP
+  port: 80
+
+env:
+  POSTGRES_HOST: postgres
+  POSTGRES_PORT: "5432"
+  POSTGRES_DB: telegram_posts
+
+secretEnv:
+  POSTGRES_USER: user
+  POSTGRES_PASSWORD: password
