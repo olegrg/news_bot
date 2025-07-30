@@ -47,6 +47,8 @@ func (db *DB) AddPost(ctx context.Context, post *models.Post) (int64, error) {
 		return 0, fmt.Errorf("failed to execute insert query: %w", err)
 	}
 
+	db.UpdateChannelOffsetMessageID(ctx, post.ChannelID, post.MessageID)
+
 	return id, nil
 }
 
@@ -224,10 +226,18 @@ func (db *DB) GetUserIDByTelegramID(ctx context.Context, telegramID int64) (int6
 }
 
 func (db *DB) GetPersonalizedTopPosts(ctx context.Context, userID int64) ([]models.ScoredPost, error) {
+	subscriptionTable := "subscriptions"
+	postTable := "posts"
+	channelTable := "channels"
+
 	subQuery, subArgs, err := db.SqlBld.
-		Select("channel_id", "policy").
-		From("subscriptions").
-		Where(sq.Eq{"user_id": userID}).
+		Select(
+			fmt.Sprintf("%s.channel_id", subscriptionTable),
+			fmt.Sprintf("%s.policy", subscriptionTable),
+			fmt.Sprintf("%s.offset_message_id", subscriptionTable),
+		).
+		From(subscriptionTable).
+		Where(sq.Eq{fmt.Sprintf("%s.user_id", subscriptionTable): userID}).
 		ToSql()
 	if err != nil {
 		return nil, fmt.Errorf("failed to build subscriptions query: %w", err)
@@ -236,6 +246,7 @@ func (db *DB) GetPersonalizedTopPosts(ctx context.Context, userID int64) ([]mode
 	type subRow struct {
 		ChannelID int64           `db:"channel_id"`
 		Policy    json.RawMessage `db:"policy"`
+		Offset    int64           `db:"offset_message_id"`
 	}
 
 	var subs []subRow
@@ -249,28 +260,126 @@ func (db *DB) GetPersonalizedTopPosts(ctx context.Context, userID int64) ([]mode
 		var policy struct {
 			TopN int `json:"top_n"`
 		}
-		policy.TopN = 1
 		_ = json.Unmarshal(sub.Policy, &policy)
+		if policy.TopN <= 0 {
+			policy.TopN = 1
+		}
 
 		queryBuilder := db.SqlBld.
-			Select("channels.telegram_id AS channel_id", "posts.message_id").
-			From("posts").
-			Join("channels ON channels.id = posts.channel_id").
-			Where(sq.Eq{"posts.channel_id": sub.ChannelID}).
-			OrderBy("posts.score DESC").
+			Select(
+				fmt.Sprintf("%s.link", channelTable),
+				fmt.Sprintf("%s.message_id", postTable),
+			).
+			From(postTable).
+			Join(fmt.Sprintf("%s ON %s.id = %s.channel_id", channelTable, channelTable, postTable)).
+			Where(sq.And{
+				sq.Eq{fmt.Sprintf("%s.channel_id", postTable): sub.ChannelID},
+				sq.Gt{fmt.Sprintf("%s.message_id", postTable): sub.Offset},
+			}).
+			OrderBy(fmt.Sprintf("%s.score DESC", postTable)).
 			Limit(uint64(policy.TopN))
 
-		postQuery, postArgs, err := queryBuilder.ToSql()
+		sqlStr, sqlArgs, err := queryBuilder.ToSql()
 		if err != nil {
 			return nil, fmt.Errorf("failed to build posts query: %w", err)
 		}
 
-		var posts []models.ScoredPost
-		if err := db.Conn.SelectContext(ctx, &posts, postQuery, postArgs...); err != nil {
+		type rawPost struct {
+			Link      string `db:"link"`
+			MessageID int64  `db:"message_id"`
+		}
+		var rawPosts []rawPost
+		if err := db.Conn.SelectContext(ctx, &rawPosts, sqlStr, sqlArgs...); err != nil {
 			return nil, fmt.Errorf("failed to fetch posts for channel %d: %w", sub.ChannelID, err)
 		}
 
-		result = append(result, posts...)
+		if len(rawPosts) == 0 {
+			continue
+		}
+
+		messageIDs := make([]int64, 0, len(rawPosts))
+		for _, p := range rawPosts {
+			messageIDs = append(messageIDs, p.MessageID)
+		}
+
+		var maxID int64
+		for _, id := range messageIDs {
+			if id > maxID {
+				maxID = id
+			}
+		}
+
+		if err := db.UpdateSubscriptionOffsetMessageID(ctx, userID, sub.ChannelID, maxID); err != nil {
+			return nil, fmt.Errorf("failed to update offset for user %d and channel %d: %w", userID, sub.ChannelID, err)
+		}
+
+		result = append(result, models.ScoredPost{
+			Link:       rawPosts[0].Link,
+			MessageIDs: messageIDs,
+		})
+	}
+
+	return result, nil
+}
+
+func (db *DB) UpdateChannelOffsetMessageID(ctx context.Context, channelID int64, telegramPostID int64) error {
+	query, args, err := db.SqlBld.
+		Update(channelTableName).
+		Set("offset_message_id", telegramPostID).
+		Where(sq.Eq{"id": channelID}).
+		ToSql()
+	if err != nil {
+		return fmt.Errorf("failed to build update query: %w", err)
+	}
+
+	_, err = db.Conn.ExecContext(ctx, query, args...)
+	if err != nil {
+		return fmt.Errorf("failed to execute update query: %w", err)
+	}
+
+	return nil
+}
+
+func (db *DB) UpdateSubscriptionOffsetMessageID(ctx context.Context, userID, channelID, telegramPostID int64) error {
+	query, args, err := db.SqlBld.
+		Update("subscriptions").
+		Set("offset_message_id", telegramPostID).
+		Where(sq.Eq{
+			"user_id":    userID,
+			"channel_id": channelID,
+		}).
+		ToSql()
+	if err != nil {
+		return fmt.Errorf("failed to build update query: %w", err)
+	}
+
+	_, err = db.Conn.ExecContext(ctx, query, args...)
+	if err != nil {
+		return fmt.Errorf("failed to execute update query: %w", err)
+	}
+
+	return nil
+}
+
+func (db *DB) GetUserSubscriptionOffsets(ctx context.Context, userID int64) ([]models.ChannelOffset, error) {
+	query := db.SqlBld.
+		Select(
+			fmt.Sprintf("%s.channel_id", subscriptionTableName),
+			fmt.Sprintf("%s.link", channelTableName),
+			fmt.Sprintf("%s.offset_message_id", subscriptionTableName),
+		).
+		From(subscriptionTableName).
+		Join(fmt.Sprintf("%s ON %s.id = %s.channel_id", channelTableName, channelTableName, subscriptionTableName)).
+		Where(sq.Eq{fmt.Sprintf("%s.user_id", subscriptionTableName): userID})
+
+	sqlStr, args, err := query.ToSql()
+	if err != nil {
+		return nil, fmt.Errorf("failed to build subscription offsets query: %w", err)
+	}
+
+	var result []models.ChannelOffset
+	if err := db.Conn.SelectContext(ctx, &result, sqlStr, args...); err != nil {
+		return nil, fmt.Errorf("failed to fetch subscription offsets: %w", err)
 	}
 
 	return result, nil
