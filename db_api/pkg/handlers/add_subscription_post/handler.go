@@ -13,8 +13,9 @@ type Handler struct {
 }
 
 type Request struct {
-	User    models.User    `json:"user"`
-	Channel models.Channel `json:"channel"`
+	User    models.User            `json:"user"`
+	Channel models.Channel         `json:"channel"`
+	Policy  map[string]interface{} `db:"policy" json:"policy"`
 }
 
 func (h *Handler) Handle(w http.ResponseWriter, r *http.Request) {
@@ -42,6 +43,7 @@ func (h *Handler) Handle(w http.ResponseWriter, r *http.Request) {
 	_, err = h.DB.GetOrCreateSubscription(ctx, &models.Subscription{
 		UserID:    userID,
 		ChannelID: channelID,
+		Policy:    req.Policy,
 	})
 	if err != nil {
 		http.Error(w, "failed to create subscription: "+err.Error(), http.StatusInternalServerError)

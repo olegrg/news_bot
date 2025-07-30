@@ -13,6 +13,7 @@ CREATE TABLE IF NOT EXISTS channels (
     link VARCHAR UNIQUE NOT NULL,
     title VARCHAR,
     is_private BOOLEAN NOT NULL DEFAULT FALSE,
+    offset_message_id BIGINT DEFAULT 0,
     created_at TIMESTAMPTZ DEFAULT now()
 );
 
@@ -23,6 +24,8 @@ CREATE TABLE IF NOT EXISTS posts (
     published_at TIMESTAMPTZ NOT NULL,
     content TEXT,
     views INTEGER,
+    reactions INTEGER,
+    comments INTEGER,
     forwards INTEGER,
     score FLOAT,
     created_at TIMESTAMPTZ DEFAULT now(),
@@ -55,8 +58,9 @@ CREATE TABLE IF NOT EXISTS verified_access (
 CREATE TABLE IF NOT EXISTS subscriptions (
     user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
     channel_id BIGINT NOT NULL REFERENCES channels(id) ON DELETE CASCADE,
-
     policy JSONB DEFAULT NULL,
+    offset_message_id BIGINT DEFAULT 0,
+
 
     PRIMARY KEY (user_id, channel_id)
 );
