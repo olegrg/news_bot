@@ -10,7 +10,7 @@ CREATE TABLE IF NOT EXISTS users (
 CREATE TABLE IF NOT EXISTS channels (
     id BIGSERIAL PRIMARY KEY,
     telegram_id BIGINT UNIQUE NOT NULL,
-    link VARCHAR UNIQUE NOT NULL,
+    link VARCHAR UNIQUE,
     title VARCHAR,
     is_private BOOLEAN NOT NULL DEFAULT FALSE,
     offset_message_id BIGINT DEFAULT 0,
@@ -20,6 +20,7 @@ CREATE TABLE IF NOT EXISTS channels (
 CREATE TABLE IF NOT EXISTS posts (
     id BIGSERIAL PRIMARY KEY,
     message_id BIGINT NOT NULL,
+    grouped_id BIGINT,
     channel_id BIGINT NOT NULL REFERENCES channels(id) ON DELETE CASCADE,
     published_at TIMESTAMPTZ NOT NULL,
     content TEXT,

@@ -14,12 +14,38 @@ spec:
       labels:
         app: {{ include "db-api.name" . }}
     spec:
+      initContainers:
+        - name: wait-for-postgres
+          image: postgres:15
+          env:
+            - name: POSTGRES_HOST
+              value: {{ .Values.env.POSTGRES_HOST | quote }}
+            - name: POSTGRES_PORT
+              value: {{ .Values.env.POSTGRES_PORT | quote }}
+          command:
+            - sh
+            - -c
+            - |
+              until pg_isready -h "$POSTGRES_HOST" -p "$POSTGRES_PORT"; do
+                echo "waiting for postgres at $POSTGRES_HOST:$POSTGRES_PORT"
+                sleep 2
+              done
       containers:
         - name: db-api
           image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
           imagePullPolicy: {{ .Values.image.pullPolicy }}
           ports:
             - containerPort: 8080
+          readinessProbe:
+            tcpSocket:
+              port: 8080
+            initialDelaySeconds: 3
+            periodSeconds: 5
+          livenessProbe:
+            tcpSocket:
+              port: 8080
+            initialDelaySeconds: 10
+            periodSeconds: 10
           env:
             - name: POSTGRES_HOST
               value: {{ .Values.env.POSTGRES_HOST | quote }}

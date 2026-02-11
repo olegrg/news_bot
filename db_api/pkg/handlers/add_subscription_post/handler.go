@@ -40,13 +40,13 @@ func (h *Handler) Handle(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	_, err = h.DB.GetOrCreateSubscription(ctx, &models.Subscription{
+	err = h.DB.AddSubscription(ctx, &models.Subscription{
 		UserID:    userID,
 		ChannelID: channelID,
 		Policy:    req.Policy,
 	})
 	if err != nil {
-		http.Error(w, "failed to create subscription: "+err.Error(), http.StatusInternalServerError)
+		http.Error(w, "failed to create or update subscription: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
 

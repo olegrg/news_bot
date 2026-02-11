@@ -5,6 +5,7 @@ import "time"
 type Post struct {
 	ID          int64     `db:"id" json:"id"`
 	MessageID   int64     `db:"message_id" json:"message_id"`
+	GroupedID   *int64    `db:"grouped_id" json:"grouped_id"`
 	ChannelID   int64     `db:"channel_id" json:"channel_id"`
 	PublishedAt time.Time `db:"published_at" json:"published_at"` // или time.Time
 	Content     string    `db:"content" json:"content"`
@@ -18,5 +19,6 @@ type Post struct {
 
 type ScoredPost struct {
 	Link       string  `json:"link" db:"link"`
+	TelegramID int64   `json:"telegram_id" db:"telegram_id"`
 	MessageIDs []int64 `db:"message_id" json:"message_ids"`
 }
