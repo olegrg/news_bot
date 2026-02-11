@@ -21,9 +21,16 @@ if ! command -v "$PYTHON_BIN" >/dev/null 2>&1; then
   exit 1
 fi
 
-if [[ ! -d "$VENV_DIR" ]]; then
+if [[ ! -d "$VENV_DIR" || ! -f "$VENV_DIR/bin/activate" ]]; then
   echo "Creating virtualenv at $VENV_DIR"
+  rm -rf "$VENV_DIR"
   "$PYTHON_BIN" -m venv "$VENV_DIR"
+fi
+
+if [[ ! -f "$VENV_DIR/bin/activate" ]]; then
+  echo "Virtualenv activation script not found: $VENV_DIR/bin/activate" >&2
+  echo "Install python venv package: sudo apt-get install -y python3-venv" >&2
+  exit 1
 fi
 
 source "$VENV_DIR/bin/activate"
