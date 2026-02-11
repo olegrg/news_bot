@@ -46,8 +46,9 @@ if [[ ! -f "$REQ_FILE" ]]; then
 fi
 
 echo "Installing dependencies from $REQ_FILE"
-python -m pip install --upgrade pip >/dev/null
-python -m pip install -r "$REQ_FILE" >/dev/null
+python -m pip install --upgrade pip
+python -m pip install --upgrade -r "$REQ_FILE"
+python -m pip check
 
 echo "Starting userbot with:"
 echo "  API_BASE_URL=$API_BASE_URL"
