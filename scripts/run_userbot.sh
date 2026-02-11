@@ -3,6 +3,8 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 USERBOT_DIR="$ROOT_DIR/userbot_service"
+VENV_DIR="${VENV_DIR:-$USERBOT_DIR/.venv}"
+PYTHON_BIN="${PYTHON_BIN:-python3}"
 
 export API_BASE_URL="${API_BASE_URL:-http://localhost:8080}"
 export REDIS_URL="${REDIS_URL:-redis://localhost:6379/0}"
@@ -14,6 +16,32 @@ if [[ ! -f "$USERBOT_DIR/main.py" ]]; then
   exit 1
 fi
 
+if ! command -v "$PYTHON_BIN" >/dev/null 2>&1; then
+  echo "Python not found: $PYTHON_BIN" >&2
+  exit 1
+fi
+
+if [[ ! -d "$VENV_DIR" ]]; then
+  echo "Creating virtualenv at $VENV_DIR"
+  "$PYTHON_BIN" -m venv "$VENV_DIR"
+fi
+
+source "$VENV_DIR/bin/activate"
+
+REQ_FILE="$USERBOT_DIR/requirments.txt"
+if [[ ! -f "$REQ_FILE" ]]; then
+  REQ_FILE="$USERBOT_DIR/requirements.txt"
+fi
+
+if [[ ! -f "$REQ_FILE" ]]; then
+  echo "Requirements file not found in $USERBOT_DIR" >&2
+  exit 1
+fi
+
+echo "Installing dependencies from $REQ_FILE"
+python -m pip install --upgrade pip >/dev/null
+python -m pip install -r "$REQ_FILE" >/dev/null
+
 echo "Starting userbot with:"
 echo "  API_BASE_URL=$API_BASE_URL"
 echo "  REDIS_URL=$REDIS_URL"
@@ -21,4 +49,4 @@ echo "  DELIVERY_WORKERS=$DELIVERY_WORKERS"
 echo "  DELIVERY_MIN_INTERVAL_SEC=$DELIVERY_MIN_INTERVAL_SEC"
 
 cd "$USERBOT_DIR"
-python3 main.py
+python main.py
