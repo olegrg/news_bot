@@ -250,7 +250,6 @@ func (db *DB) GetPersonalizedTopPosts(ctx context.Context, userID int64) ([]mode
 		Select(
 			fmt.Sprintf("%s.channel_id", subscriptionTable),
 			fmt.Sprintf("%s.policy", subscriptionTable),
-			fmt.Sprintf("%s.offset_message_id", subscriptionTable),
 		).
 		From(subscriptionTable).
 		Where(sq.Eq{fmt.Sprintf("%s.user_id", subscriptionTable): userID}).
@@ -262,7 +261,6 @@ func (db *DB) GetPersonalizedTopPosts(ctx context.Context, userID int64) ([]mode
 	type subRow struct {
 		ChannelID int64           `db:"channel_id"`
 		Policy    json.RawMessage `db:"policy"`
-		Offset    int64           `db:"offset_message_id"`
 	}
 
 	var subs []subRow
@@ -280,14 +278,18 @@ func (db *DB) GetPersonalizedTopPosts(ctx context.Context, userID int64) ([]mode
 		if policy.TopN <= 0 {
 			policy.TopN = 1
 		}
+		maxAgeDays := 14
 
 		sqlStr := `
 WITH ranked AS (
     SELECT
-        COALESCE(grouped_id, message_id) AS group_id,
-        MAX(score) AS max_score
-    FROM posts
-    WHERE channel_id = $1 AND message_id > $2
+        COALESCE(p.grouped_id, p.message_id) AS group_id,
+        MAX(p.score) AS max_score
+    FROM posts p
+    LEFT JOIN user_seen_posts usp ON usp.post_id = p.id AND usp.user_id = $2
+    WHERE p.channel_id = $1
+      AND usp.post_id IS NULL
+      AND p.published_at >= NOW() - ($4::text || ' days')::interval
     GROUP BY group_id
     ORDER BY max_score DESC
     LIMIT $3
@@ -295,6 +297,7 @@ WITH ranked AS (
 SELECT
     COALESCE(c.link, '') AS link,
     c.telegram_id AS telegram_id,
+    p.id AS post_id,
     COALESCE(p.grouped_id, p.message_id) AS group_id,
     p.message_id AS message_id
 FROM posts p
@@ -306,11 +309,12 @@ ORDER BY r.max_score DESC, p.message_id ASC`
 		type rawRow struct {
 			Link       string `db:"link"`
 			TelegramID int64  `db:"telegram_id"`
+			PostID     int64  `db:"post_id"`
 			GroupID    int64  `db:"group_id"`
 			MessageID  int64  `db:"message_id"`
 		}
 		var rows []rawRow
-		if err := db.Conn.SelectContext(ctx, &rows, sqlStr, sub.ChannelID, sub.Offset, policy.TopN); err != nil {
+		if err := db.Conn.SelectContext(ctx, &rows, sqlStr, sub.ChannelID, userID, policy.TopN, maxAgeDays); err != nil {
 			return nil, fmt.Errorf("failed to fetch posts for channel %d: %w", sub.ChannelID, err)
 		}
 
@@ -320,12 +324,10 @@ ORDER BY r.max_score DESC, p.message_id ASC`
 
 		grouped := make(map[int64]*models.ScoredPost)
 		groupOrder := make([]int64, 0)
-		var maxID int64
+		seenPostIDs := make([]int64, 0, len(rows))
 
 		for _, row := range rows {
-			if row.MessageID > maxID {
-				maxID = row.MessageID
-			}
+			seenPostIDs = append(seenPostIDs, row.PostID)
 			entry, exists := grouped[row.GroupID]
 			if !exists {
 				grouped[row.GroupID] = &models.ScoredPost{
@@ -339,8 +341,8 @@ ORDER BY r.max_score DESC, p.message_id ASC`
 			entry.MessageIDs = append(entry.MessageIDs, row.MessageID)
 		}
 
-		if err := db.UpdateSubscriptionOffsetMessageID(ctx, userID, sub.ChannelID, maxID); err != nil {
-			return nil, fmt.Errorf("failed to update offset for user %d and channel %d: %w", userID, sub.ChannelID, err)
+		if err := db.MarkPostsSeen(ctx, userID, seenPostIDs); err != nil {
+			return nil, fmt.Errorf("failed to mark posts seen for user %d and channel %d: %w", userID, sub.ChannelID, err)
 		}
 
 		for _, groupID := range groupOrder {
@@ -349,6 +351,29 @@ ORDER BY r.max_score DESC, p.message_id ASC`
 	}
 
 	return result, nil
+}
+
+func (db *DB) MarkPostsSeen(ctx context.Context, userID int64, postIDs []int64) error {
+	if len(postIDs) == 0 {
+		return nil
+	}
+
+	for _, postID := range postIDs {
+		query, args, err := db.SqlBld.
+			Insert("user_seen_posts").
+			Columns("user_id", "post_id").
+			Values(userID, postID).
+			Suffix("ON CONFLICT (user_id, post_id) DO NOTHING").
+			ToSql()
+		if err != nil {
+			return fmt.Errorf("failed to build seen insert query: %w", err)
+		}
+		if _, err := db.Conn.ExecContext(ctx, query, args...); err != nil {
+			return fmt.Errorf("failed to insert seen post relation: %w", err)
+		}
+	}
+
+	return nil
 }
 
 func (db *DB) UpdateChannelOffsetMessageID(ctx context.Context, channelID int64, telegramPostID int64) error {
@@ -396,7 +421,7 @@ func (db *DB) GetUserSubscriptionOffsets(ctx context.Context, userID int64) ([]m
 			fmt.Sprintf("%s.channel_id", subscriptionTableName),
 			fmt.Sprintf("%s.telegram_id", channelTableName),
 			fmt.Sprintf("%s.link", channelTableName),
-			fmt.Sprintf("%s.offset_message_id", subscriptionTableName),
+			fmt.Sprintf("%s.offset_message_id", channelTableName),
 		).
 		From(subscriptionTableName).
 		Join(fmt.Sprintf("%s ON %s.id = %s.channel_id", channelTableName, channelTableName, subscriptionTableName)).

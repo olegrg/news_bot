@@ -1,11 +1,12 @@
 package get_subscriptions_by_user_get
 
 import (
-    "context"
-    "db_api/pkg/db"
-    "encoding/json"
-    "net/http"
-    "strconv"
+	"context"
+	"db_api/pkg/db"
+	"encoding/json"
+	"net/http"
+	"strconv"
+	"strings"
 )
 
 type Handler struct {
@@ -27,11 +28,18 @@ func (h *Handler) Handle(w http.ResponseWriter, r *http.Request) {
 
     ctx := context.Background()
 
-    userID, err := h.DB.GetUserIDByTelegramID(ctx, telegramID)
-    if err != nil {
-        http.Error(w, "failed to find user by telegram_id: "+err.Error(), http.StatusInternalServerError)
-        return
-    }
+	userID, err := h.DB.GetUserIDByTelegramID(ctx, telegramID)
+	if err != nil {
+		if strings.Contains(err.Error(), "no rows") {
+			w.Header().Set("Content-Type", "application/json")
+			json.NewEncoder(w).Encode(map[string]interface{}{
+				"subscriptions": []interface{}{},
+			})
+			return
+		}
+		http.Error(w, "failed to find user by telegram_id: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
 
     subs, err := h.DB.GetUserSubscriptions(ctx, userID)
     if err != nil {

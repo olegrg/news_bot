@@ -35,6 +35,10 @@ export API_BASE_URL=http://localhost:8080
 export REDIS_URL=redis://localhost:6379/0
 export DELIVERY_WORKERS=1
 export DELIVERY_MIN_INTERVAL_SEC=0.35
+export LLM_API_KEY=<your_key>
+export LLM_MODEL=gpt-4o-mini
+# optional:
+# export LLM_API_BASE=https://api.openai.com/v1
 ```
 
 ## Automation Scripts

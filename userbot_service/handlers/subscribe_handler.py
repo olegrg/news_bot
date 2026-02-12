@@ -9,6 +9,21 @@ from telethon.tl.types import PeerChannel
 DEFAULT_TOP_N = 3
 DEFAULT_SEND_IMMEDIATELY = False
 
+
+def _bool_ru(value):
+    return "да" if bool(value) else "нет"
+
+
+def format_policy_human(policy):
+    parts = []
+    if "top_n" in policy and policy["top_n"] is not None:
+        parts.append(f"Максимум постов за раз: {policy['top_n']}")
+    if "send_immediately" in policy and policy["send_immediately"] is not None:
+        parts.append(f"Присылать новые посты сразу: {_bool_ru(policy['send_immediately'])}")
+    if not parts:
+        return "Без настроек"
+    return "; ".join(parts)
+
 def _parse_top_n(text):
     if not text:
         return None
@@ -121,7 +136,8 @@ async def handle_subscribe_command(event, client):
     await subscribe_user(user, channel, policy)
     await refresh_immediate_subscriptions()
     await event.respond(
-        f"Подписка создана: {channel['title']} (top_n={top_n}, send_immediately={send_immediately})"
+        f"Подписка создана: {channel['title']}\n"
+        f"{format_policy_human(policy)}"
     )
 
 async def handle_policy_command(event, client):
@@ -164,12 +180,10 @@ async def handle_policy_command(event, client):
     print(f"Updating policy for user {user['telegram_id']} and channel {channel['telegram_id']}")
     await subscribe_user(user, channel, policy)
     await refresh_immediate_subscriptions()
-    parts = []
-    if "top_n" in policy:
-        parts.append(f"top_n={policy['top_n']}")
-    if "send_immediately" in policy:
-        parts.append(f"send_immediately={policy['send_immediately']}")
-    await event.respond(f"Политика обновлена: {channel['title']} ({', '.join(parts)})")
+    await event.respond(
+        f"Политика обновлена: {channel['title']}\n"
+        f"{format_policy_human(policy)}"
+    )
 
 
 async def handle_list_command(event, client):
@@ -177,7 +191,11 @@ async def handle_list_command(event, client):
         return
 
     sender = await event.get_sender()
-    data = await get_subscriptions(sender.id)
+    try:
+        data = await get_subscriptions(sender.id)
+    except Exception as exc:
+        await event.respond(f"Не удалось получить подписки. Попробуйте позже.\nДетали: {exc}")
+        return
     subs = data.get("subscriptions", [])
     if not subs:
         await event.respond("У вас нет подписок.")
@@ -194,12 +212,10 @@ async def handle_list_command(event, client):
                 policy_raw = {}
         top_n = policy_raw.get("top_n")
         send_immediately = policy_raw.get("send_immediately")
-        parts = []
-        if top_n is not None:
-            parts.append(f"top_n={top_n}")
-        if send_immediately is not None:
-            parts.append(f"send_immediately={send_immediately}")
-        policy_text = ", ".join(parts) if parts else "без политики"
+        policy_text = format_policy_human({
+            "top_n": top_n,
+            "send_immediately": send_immediately,
+        })
         lines.append(f"{idx}. {title} ({policy_text})")
 
     await event.respond("\n".join(lines))
