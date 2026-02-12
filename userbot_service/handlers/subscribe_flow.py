@@ -160,6 +160,7 @@ async def handle_message(event, client):
         if state.get("mode") == "delete":
             sender = await event.get_sender()
             await delete_subscription(sender.id, channel_entity.id)
+            await refresh_immediate_subscriptions()
             _clear_state(user_id)
             await event.respond(f"Подписка удалена: {channel_entity.title}")
             return
