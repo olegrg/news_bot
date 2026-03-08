@@ -33,8 +33,8 @@ func (db *DB) AddUser(ctx context.Context, user *models.User) (int64, error) {
 func (db *DB) AddPost(ctx context.Context, post *models.Post) (int64, error) {
 	query, args, err := db.SqlBld.
 		Insert("posts").
-		Columns("message_id", "channel_id", "published_at", "content", "views", "forwards", "score").
-		Values(post.MessageID, post.ChannelID, post.PublishedAt, post.Content, post.Views, post.Forwards, post.Score).
+		Columns("message_id", "grouped_id", "channel_id", "published_at", "content", "views", "reactions", "comments", "forwards", "score").
+		Values(post.MessageID, post.GroupedID, post.ChannelID, post.PublishedAt, post.Content, post.Views, post.Reactions, post.Comments, post.Forwards, post.Score).
 		Suffix("RETURNING id").
 		ToSql()
 	if err != nil {
@@ -92,7 +92,7 @@ func (db *DB) AddSubscription(ctx context.Context, sub *models.Subscription) err
 		Insert(subscriptionTableName).
 		Columns("user_id", "channel_id", "policy").
 		Values(sub.UserID, sub.ChannelID, policyJSON).
-		Suffix("ON CONFLICT (user_id, channel_id) DO UPDATE SET policy = EXCLUDED.policy").
+		Suffix("ON CONFLICT (user_id, channel_id) DO UPDATE SET policy = COALESCE(subscriptions.policy, '{}'::jsonb) || EXCLUDED.policy").
 		ToSql()
 	if err != nil {
 		return fmt.Errorf("failed to build insert query: %w", err)
@@ -225,16 +225,31 @@ func (db *DB) GetUserIDByTelegramID(ctx context.Context, telegramID int64) (int6
 	return userID, nil
 }
 
+func (db *DB) GetChannelIDByTelegramID(ctx context.Context, telegramID int64) (int64, error) {
+	query, args, err := db.SqlBld.
+		Select("id").
+		From(channelTableName).
+		Where(sq.Eq{"telegram_id": telegramID}).
+		ToSql()
+	if err != nil {
+		return 0, fmt.Errorf("failed to build channel lookup query: %w", err)
+	}
+
+	var channelID int64
+	if err := db.Conn.GetContext(ctx, &channelID, query, args...); err != nil {
+		return 0, fmt.Errorf("failed to find channel: %w", err)
+	}
+
+	return channelID, nil
+}
+
 func (db *DB) GetPersonalizedTopPosts(ctx context.Context, userID int64) ([]models.ScoredPost, error) {
 	subscriptionTable := "subscriptions"
-	postTable := "posts"
-	channelTable := "channels"
 
 	subQuery, subArgs, err := db.SqlBld.
 		Select(
 			fmt.Sprintf("%s.channel_id", subscriptionTable),
 			fmt.Sprintf("%s.policy", subscriptionTable),
-			fmt.Sprintf("%s.offset_message_id", subscriptionTable),
 		).
 		From(subscriptionTable).
 		Where(sq.Eq{fmt.Sprintf("%s.user_id", subscriptionTable): userID}).
@@ -246,7 +261,6 @@ func (db *DB) GetPersonalizedTopPosts(ctx context.Context, userID int64) ([]mode
 	type subRow struct {
 		ChannelID int64           `db:"channel_id"`
 		Policy    json.RawMessage `db:"policy"`
-		Offset    int64           `db:"offset_message_id"`
 	}
 
 	var subs []subRow
@@ -264,62 +278,102 @@ func (db *DB) GetPersonalizedTopPosts(ctx context.Context, userID int64) ([]mode
 		if policy.TopN <= 0 {
 			policy.TopN = 1
 		}
+		maxAgeDays := 14
 
-		queryBuilder := db.SqlBld.
-			Select(
-				fmt.Sprintf("%s.link", channelTable),
-				fmt.Sprintf("%s.message_id", postTable),
-			).
-			From(postTable).
-			Join(fmt.Sprintf("%s ON %s.id = %s.channel_id", channelTable, channelTable, postTable)).
-			Where(sq.And{
-				sq.Eq{fmt.Sprintf("%s.channel_id", postTable): sub.ChannelID},
-				sq.Gt{fmt.Sprintf("%s.message_id", postTable): sub.Offset},
-			}).
-			OrderBy(fmt.Sprintf("%s.score DESC", postTable)).
-			Limit(uint64(policy.TopN))
+		sqlStr := `
+WITH ranked AS (
+    SELECT
+        COALESCE(p.grouped_id, p.message_id) AS group_id,
+        MAX(p.score) AS max_score
+    FROM posts p
+    LEFT JOIN user_seen_posts usp ON usp.post_id = p.id AND usp.user_id = $2
+    WHERE p.channel_id = $1
+      AND usp.post_id IS NULL
+      AND p.published_at >= NOW() - ($4::text || ' days')::interval
+    GROUP BY group_id
+    ORDER BY max_score DESC
+    LIMIT $3
+)
+SELECT
+    COALESCE(c.link, '') AS link,
+    c.telegram_id AS telegram_id,
+    p.id AS post_id,
+    COALESCE(p.grouped_id, p.message_id) AS group_id,
+    p.message_id AS message_id
+FROM posts p
+JOIN channels c ON c.id = p.channel_id
+JOIN ranked r ON r.group_id = COALESCE(p.grouped_id, p.message_id)
+WHERE p.channel_id = $1
+ORDER BY r.max_score DESC, p.message_id ASC`
 
-		sqlStr, sqlArgs, err := queryBuilder.ToSql()
-		if err != nil {
-			return nil, fmt.Errorf("failed to build posts query: %w", err)
+		type rawRow struct {
+			Link       string `db:"link"`
+			TelegramID int64  `db:"telegram_id"`
+			PostID     int64  `db:"post_id"`
+			GroupID    int64  `db:"group_id"`
+			MessageID  int64  `db:"message_id"`
 		}
-
-		type rawPost struct {
-			Link      string `db:"link"`
-			MessageID int64  `db:"message_id"`
-		}
-		var rawPosts []rawPost
-		if err := db.Conn.SelectContext(ctx, &rawPosts, sqlStr, sqlArgs...); err != nil {
+		var rows []rawRow
+		if err := db.Conn.SelectContext(ctx, &rows, sqlStr, sub.ChannelID, userID, policy.TopN, maxAgeDays); err != nil {
 			return nil, fmt.Errorf("failed to fetch posts for channel %d: %w", sub.ChannelID, err)
 		}
 
-		if len(rawPosts) == 0 {
+		if len(rows) == 0 {
 			continue
 		}
 
-		messageIDs := make([]int64, 0, len(rawPosts))
-		for _, p := range rawPosts {
-			messageIDs = append(messageIDs, p.MessageID)
-		}
+		grouped := make(map[int64]*models.ScoredPost)
+		groupOrder := make([]int64, 0)
+		seenPostIDs := make([]int64, 0, len(rows))
 
-		var maxID int64
-		for _, id := range messageIDs {
-			if id > maxID {
-				maxID = id
+		for _, row := range rows {
+			seenPostIDs = append(seenPostIDs, row.PostID)
+			entry, exists := grouped[row.GroupID]
+			if !exists {
+				grouped[row.GroupID] = &models.ScoredPost{
+					Link:       row.Link,
+					TelegramID: row.TelegramID,
+					MessageIDs: []int64{row.MessageID},
+				}
+				groupOrder = append(groupOrder, row.GroupID)
+				continue
 			}
+			entry.MessageIDs = append(entry.MessageIDs, row.MessageID)
 		}
 
-		if err := db.UpdateSubscriptionOffsetMessageID(ctx, userID, sub.ChannelID, maxID); err != nil {
-			return nil, fmt.Errorf("failed to update offset for user %d and channel %d: %w", userID, sub.ChannelID, err)
+		if err := db.MarkPostsSeen(ctx, userID, seenPostIDs); err != nil {
+			return nil, fmt.Errorf("failed to mark posts seen for user %d and channel %d: %w", userID, sub.ChannelID, err)
 		}
 
-		result = append(result, models.ScoredPost{
-			Link:       rawPosts[0].Link,
-			MessageIDs: messageIDs,
-		})
+		for _, groupID := range groupOrder {
+			result = append(result, *grouped[groupID])
+		}
 	}
 
 	return result, nil
+}
+
+func (db *DB) MarkPostsSeen(ctx context.Context, userID int64, postIDs []int64) error {
+	if len(postIDs) == 0 {
+		return nil
+	}
+
+	for _, postID := range postIDs {
+		query, args, err := db.SqlBld.
+			Insert("user_seen_posts").
+			Columns("user_id", "post_id").
+			Values(userID, postID).
+			Suffix("ON CONFLICT (user_id, post_id) DO NOTHING").
+			ToSql()
+		if err != nil {
+			return fmt.Errorf("failed to build seen insert query: %w", err)
+		}
+		if _, err := db.Conn.ExecContext(ctx, query, args...); err != nil {
+			return fmt.Errorf("failed to insert seen post relation: %w", err)
+		}
+	}
+
+	return nil
 }
 
 func (db *DB) UpdateChannelOffsetMessageID(ctx context.Context, channelID int64, telegramPostID int64) error {
@@ -365,8 +419,9 @@ func (db *DB) GetUserSubscriptionOffsets(ctx context.Context, userID int64) ([]m
 	query := db.SqlBld.
 		Select(
 			fmt.Sprintf("%s.channel_id", subscriptionTableName),
+			fmt.Sprintf("%s.telegram_id", channelTableName),
 			fmt.Sprintf("%s.link", channelTableName),
-			fmt.Sprintf("%s.offset_message_id", subscriptionTableName),
+			fmt.Sprintf("%s.offset_message_id", channelTableName),
 		).
 		From(subscriptionTableName).
 		Join(fmt.Sprintf("%s ON %s.id = %s.channel_id", channelTableName, channelTableName, subscriptionTableName)).
@@ -380,6 +435,66 @@ func (db *DB) GetUserSubscriptionOffsets(ctx context.Context, userID int64) ([]m
 	var result []models.ChannelOffset
 	if err := db.Conn.SelectContext(ctx, &result, sqlStr, args...); err != nil {
 		return nil, fmt.Errorf("failed to fetch subscription offsets: %w", err)
+	}
+
+	return result, nil
+}
+
+func (db *DB) GetUserSubscriptions(ctx context.Context, userID int64) ([]models.SubscriptionInfo, error) {
+	query := `
+SELECT
+    s.channel_id AS channel_id,
+    c.telegram_id AS channel_telegram_id,
+    c.title AS title,
+    COALESCE(c.link, '') AS link,
+    COALESCE(s.policy, '{}'::jsonb) AS policy
+FROM subscriptions s
+JOIN channels c ON c.id = s.channel_id
+WHERE s.user_id = $1
+ORDER BY c.title`
+
+	var result []models.SubscriptionInfo
+	if err := db.Conn.SelectContext(ctx, &result, query, userID); err != nil {
+		return nil, fmt.Errorf("failed to fetch subscriptions: %w", err)
+	}
+
+	return result, nil
+}
+
+func (db *DB) DeleteSubscription(ctx context.Context, userID, channelID int64) error {
+	query, args, err := db.SqlBld.
+		Delete(subscriptionTableName).
+		Where(sq.Eq{
+			"user_id":    userID,
+			"channel_id": channelID,
+		}).
+		ToSql()
+	if err != nil {
+		return fmt.Errorf("failed to build delete subscription query: %w", err)
+	}
+
+	_, err = db.Conn.ExecContext(ctx, query, args...)
+	if err != nil {
+		return fmt.Errorf("failed to execute delete subscription: %w", err)
+	}
+
+	return nil
+}
+
+func (db *DB) GetImmediateSubscriptions(ctx context.Context) ([]models.ImmediateSubscription, error) {
+	query := `
+SELECT
+    u.telegram_id AS user_telegram_id,
+    c.telegram_id AS channel_telegram_id,
+    COALESCE(c.link, '') AS link
+FROM subscriptions s
+JOIN users u ON u.id = s.user_id
+JOIN channels c ON c.id = s.channel_id
+WHERE COALESCE(s.policy->>'send_immediately', 'false') = 'true'`
+
+	var result []models.ImmediateSubscription
+	if err := db.Conn.SelectContext(ctx, &result, query); err != nil {
+		return nil, fmt.Errorf("failed to fetch immediate subscriptions: %w", err)
 	}
 
 	return result, nil

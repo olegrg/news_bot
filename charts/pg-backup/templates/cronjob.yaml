@@ -1,0 +1,91 @@
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: pg-backup
+spec:
+  schedule: {{ .Values.schedule | quote }}
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 2
+      template:
+        spec:
+          restartPolicy: OnFailure
+          initContainers:
+            - name: dump
+              image: postgres:16-alpine
+              command:
+                - sh
+                - -c
+                - |
+                  pg_dump -h "$POSTGRES_HOST" -p "$POSTGRES_PORT" -U "$POSTGRES_USER" "$POSTGRES_DB" \
+                    | gzip > /backup/dump.sql.gz
+                  echo "dump complete: $(du -h /backup/dump.sql.gz | cut -f1)"
+              env:
+                - name: POSTGRES_HOST
+                  value: {{ .Values.postgres.host | quote }}
+                - name: POSTGRES_PORT
+                  value: {{ .Values.postgres.port | quote }}
+                - name: POSTGRES_USER
+                  value: {{ .Values.postgres.user | quote }}
+                - name: POSTGRES_DB
+                  value: {{ .Values.postgres.db | quote }}
+                - name: PGPASSWORD
+                  valueFrom:
+                    secretKeyRef:
+                      name: pg-backup-secret
+                      key: POSTGRES_PASSWORD
+              volumeMounts:
+                - name: backup-vol
+                  mountPath: /backup
+          containers:
+            - name: upload
+              image: {{ .Values.image }}
+              command:
+                - sh
+                - -c
+                - |
+                  TIMESTAMP="$(date -u +%Y-%m-%dT%H%M%SZ)"
+                  FILENAME="{{ .Values.postgres.db }}_${TIMESTAMP}.sql.gz"
+                  S3_PATH="s3://{{ .Values.s3.bucket }}/{{ .Values.s3.prefix }}/${FILENAME}"
+                  S3_ARGS="--endpoint-url {{ .Values.s3.endpoint }}"
+
+                  echo "[backup] uploading to ${S3_PATH}"
+                  aws s3 cp /backup/dump.sql.gz "${S3_PATH}" ${S3_ARGS}
+                  echo "[backup] upload complete"
+
+                  # Rotate old backups
+                  EXISTING=$(aws s3 ls "s3://{{ .Values.s3.bucket }}/{{ .Values.s3.prefix }}/" ${S3_ARGS} \
+                    | awk '{print $4}' \
+                    | grep "^{{ .Values.postgres.db }}_.*\.sql\.gz$" \
+                    | sort)
+                  COUNT=$(echo "$EXISTING" | grep -c . || true)
+                  if [ "$COUNT" -gt "{{ .Values.retain }}" ]; then
+                    DELETE_COUNT=$((COUNT - {{ .Values.retain }}))
+                    echo "[backup] deleting ${DELETE_COUNT} old backup(s)"
+                    echo "$EXISTING" | head -n "${DELETE_COUNT}" | while read -r old_file; do
+                      aws s3 rm "s3://{{ .Values.s3.bucket }}/{{ .Values.s3.prefix }}/${old_file}" ${S3_ARGS}
+                      echo "[backup] deleted ${old_file}"
+                    done
+                  fi
+                  echo "[backup] done"
+              env:
+                - name: AWS_ACCESS_KEY_ID
+                  valueFrom:
+                    secretKeyRef:
+                      name: pg-backup-secret
+                      key: AWS_ACCESS_KEY_ID
+                - name: AWS_SECRET_ACCESS_KEY
+                  valueFrom:
+                    secretKeyRef:
+                      name: pg-backup-secret
+                      key: AWS_SECRET_ACCESS_KEY
+              volumeMounts:
+                - name: backup-vol
+                  mountPath: /backup
+          volumes:
+            - name: backup-vol
+              emptyDir:
+                sizeLimit: 500Mi

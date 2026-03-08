@@ -27,3 +27,22 @@ async def get_offsets(telegram_id):
         resp = await client.get(f"{API_BASE}/offsets", params={"telegram_id": telegram_id})
         resp.raise_for_status()
         return resp.json()
+
+async def get_immediate_subscriptions():
+    async with httpx.AsyncClient() as client:
+        resp = await client.get(f"{API_BASE}/immediate-subscriptions")
+        resp.raise_for_status()
+        return resp.json()
+
+async def get_subscriptions(telegram_id):
+    async with httpx.AsyncClient() as client:
+        resp = await client.get(f"{API_BASE}/subscriptions", params={"telegram_id": telegram_id})
+        resp.raise_for_status()
+        return resp.json()
+
+async def delete_subscription(user_telegram_id, channel_telegram_id):
+    payload = {"user_telegram_id": user_telegram_id, "channel_telegram_id": channel_telegram_id}
+    async with httpx.AsyncClient() as client:
+        resp = await client.post(f"{API_BASE}/unsubscribe", json=payload)
+        resp.raise_for_status()
+        return resp.json()
