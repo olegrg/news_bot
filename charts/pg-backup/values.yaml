@@ -1,0 +1,19 @@
+schedule: "0 3 * * *"  # daily at 03:00 UTC
+
+postgres:
+  host: postgres
+  port: "5432"
+  user: user
+  password: password
+  db: telegram_posts
+
+s3:
+  bucket: news-bot-backups
+  endpoint: "https://s3.amazonaws.com"  # change for Backblaze/Cloudflare R2/etc.
+  accessKeyId: ""
+  secretAccessKey: ""
+  prefix: backups
+
+retain: 7
+
+image: amazon/aws-cli:2.22.35

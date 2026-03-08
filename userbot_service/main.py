@@ -9,7 +9,7 @@ from delivery_worker import start_workers
 from handlers.subscribe_handler import handle_subscribe_command, handle_policy_command, handle_list_command, handle_unsubscribe_command
 from handlers.immediate_handler import handle_immediate_message, periodic_refresh, refresh_immediate_subscriptions, periodic_poll, set_delivery_queue
 from handlers.post_handler import handle_post_command
-from handlers.subscribe_flow import handle_message
+from handlers.subscribe_flow import handle_message, show_main_menu
 from metrics import periodic_metrics_log
 
 load_dotenv()
@@ -21,12 +21,18 @@ PHONE_NUMBER = os.getenv("PHONE_NUMBER")
 
 client = TelegramClient("userbot_session", API_ID, API_HASH)
 
-@client.on(events.NewMessage(pattern='/post'))
-async def on_post(event):
-    await handle_post_command(event, client)
+@client.on(events.NewMessage(pattern=r'^/start'))
+async def on_start(event):
+    if event.is_private:
+        await show_main_menu(event)
 
-@client.on(events.NewMessage(pattern='/posts'))
-async def on_posts(event):
+@client.on(events.NewMessage(pattern=r'^/help'))
+async def on_help(event):
+    if event.is_private:
+        await show_main_menu(event)
+
+@client.on(events.NewMessage(pattern=r'^/posts?$'))
+async def on_post(event):
     await handle_post_command(event, client)
 
 @client.on(events.NewMessage(pattern=r'^/subscribe'))

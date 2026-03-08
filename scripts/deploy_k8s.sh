@@ -12,6 +12,7 @@ NAMESPACE="${NAMESPACE:-default}"
 DB_API_RELEASE="${DB_API_RELEASE:-db-api}"
 POSTGRES_RELEASE="${POSTGRES_RELEASE:-postgres}"
 REDIS_RELEASE="${REDIS_RELEASE:-redis}"
+PG_BACKUP_RELEASE="${PG_BACKUP_RELEASE:-pg-backup}"
 
 DB_API_IMAGE="${DB_API_IMAGE:-db-api:latest}"
 BUILD_DB_API_IMAGE="${BUILD_DB_API_IMAGE:-1}"
@@ -46,14 +47,17 @@ else
   fi
 fi
 
-echo "[4/6] Deploying Postgres"
+echo "[4/7] Deploying Postgres"
 helm upgrade --install "$POSTGRES_RELEASE" "$ROOT_DIR/charts/postgres" --namespace "$NAMESPACE" --create-namespace
 
-echo "[5/6] Deploying Redis"
+echo "[5/7] Deploying Redis"
 helm upgrade --install "$REDIS_RELEASE" "$ROOT_DIR/charts/redis" --namespace "$NAMESPACE"
 
-echo "[6/6] Deploying db_api"
+echo "[6/7] Deploying db_api"
 helm upgrade --install "$DB_API_RELEASE" "$ROOT_DIR/charts/db_api" --namespace "$NAMESPACE"
+
+echo "[7/7] Deploying pg-backup CronJob"
+helm upgrade --install "$PG_BACKUP_RELEASE" "$ROOT_DIR/charts/pg-backup" --namespace "$NAMESPACE"
 
 echo "Waiting for workloads to become ready"
 kubectl rollout status statefulset/postgres -n "$NAMESPACE" --timeout=180s

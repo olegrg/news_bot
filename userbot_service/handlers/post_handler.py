@@ -51,7 +51,10 @@ async def handle_post_command(event, client):
     try:
         offsets = await get_offsets(telegram_id)
     except Exception as e:
-        await event.respond("Не удалось получить подписки: " + str(e))
+        await event.respond(
+            "Не удалось получить подписки.\n"
+            "Перешлите пост из канала, чтобы подписаться."
+        )
         return
 
     for entry in offsets.get("offsets", []):
@@ -103,7 +106,10 @@ async def handle_post_command(event, client):
     posts = top_posts.get("posts", [])
 
     if not posts:
-        await event.respond("Нет новых интересных постов 🤷‍♂️")
+        await event.respond(
+            "Нет новых интересных постов.\n"
+            "Перешлите пост из канала, чтобы добавить подписку."
+        )
         return
 
     for post_batch in posts:

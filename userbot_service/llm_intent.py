@@ -22,8 +22,10 @@ async def parse_intent_with_llm(text: str, subscriptions: List[Dict[str, Any]]) 
     system_prompt = (
         "You are intent parser for Telegram assistant. "
         "Return strict JSON only with schema: "
-        "{\"intent\":\"help|list|fetch_posts|unsubscribe_by_index|set_send_immediately|unknown\","
-        "\"index\":number|null,\"value\":true|false|null}."
+        "{\"intent\":\"help|list|fetch_posts|subscribe|unsubscribe_by_index|set_send_immediately|unknown\","
+        "\"index\":number|null,\"value\":true|false|null}.\n"
+        "subscribe = user wants to add a new channel subscription.\n"
+        "fetch_posts = user wants to see new/interesting/top posts."
     )
 
     user_prompt = (
@@ -74,24 +76,35 @@ def parse_intent_fallback(text: str) -> Dict[str, Any]:
     if not low:
         return {"intent": "help", "index": None, "value": None}
 
-    if any(token in low for token in ["привет", "help", "помощ", "что уме", "команд"]):
+    if any(token in low for token in ["привет", "help", "помощ", "умеешь", "команд", "старт", "начат"]):
         return {"intent": "help", "index": None, "value": None}
-
-    if any(token in low for token in ["список", "подписк", "покажи"]):
-        return {"intent": "list", "index": None, "value": None}
-
-    if any(token in low for token in ["пришли пост", "посты", "дальше", "следующ", "еще пост", "ещё пост"]):
-        return {"intent": "fetch_posts", "index": None, "value": None}
 
     idx = _extract_index(low)
 
-    if "отпиш" in low or "удали подпис" in low:
+    # unsubscribe — check before "list" because "подписк" appears in both
+    if any(token in low for token in ["отпиш", "отпис", "отподпис", "убери", "убрать", "удали"]):
         return {"intent": "unsubscribe_by_index", "index": idx, "value": None}
 
+    # immediate delivery
     if any(token in low for token in ["сразу", "немед", "мгнов", "immediate"]):
-        disable_markers = ["не ", "отключ", "выключ", "убери", "false", "нет"]
+        disable_markers = ["не ", "отключ", "выключ", "убери", "false", "нет", "без"]
         value = not any(marker in low for marker in disable_markers)
         return {"intent": "set_send_immediately", "index": idx, "value": value}
+
+    # fetch posts — check before "list" because "покажи посты" should be fetch, not list
+    if any(token in low for token in [
+        "пост", "новости", "новое", "что нового", "дальше",
+        "следующ", "еще", "ещё", "интересн", "лучш", "топ",
+    ]):
+        return {"intent": "fetch_posts", "index": None, "value": None}
+
+    # list subscriptions — "подписки" and "подписан" mean list, not subscribe
+    if any(token in low for token in ["список", "подписки", "подписан", "каналы", "мои канал"]):
+        return {"intent": "list", "index": None, "value": None}
+
+    # user wants to subscribe but didn't forward a post
+    if any(token in low for token in ["подпис", "добавь", "добавить", "хочу читать"]):
+        return {"intent": "subscribe", "index": None, "value": None}
 
     return {"intent": "unknown", "index": None, "value": None}
 
@@ -137,6 +150,7 @@ def _normalize_intent(data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         "help",
         "list",
         "fetch_posts",
+        "subscribe",
         "unsubscribe_by_index",
         "set_send_immediately",
         "unknown",

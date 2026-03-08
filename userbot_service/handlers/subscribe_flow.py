@@ -20,17 +20,19 @@ STEP_CHANNEL = "awaiting_channel"
 STEP_IMMEDIATE = "awaiting_immediate"
 
 HELP_TEXT = (
-    "Я умею работать с подписками на каналы.\n"
-    "Вы можете просто писать обычным языком: например, "
-    "\"отпиши меня от подписки 4\" или "
-    "\"сделай, чтобы из канала 5 посты приходили сразу\".\n"
-    "Также можно переслать пост из канала, чтобы подписаться и настроить параметры.\n\n"
-    "Важно: я работаю только с подписками и только с открытыми каналами."
+    "Привет! Я помогаю читать только интересные посты из Telegram-каналов.\n\n"
+    "Как пользоваться:\n"
+    "- Перешли мне пост из канала — я подпишу тебя\n"
+    "- Напиши \"посты\" или \"что нового\" — покажу лучшее\n"
+    "- Напиши \"мои подписки\" — список каналов\n"
+    "- \"отпиши от 2\" — отписаться по номеру из списка\n"
+    "- \"присылай из 3 сразу\" — включить мгновенную доставку\n\n"
+    "Просто пиши обычным языком, я пойму."
 )
 
 OFF_TOPIC_TEXT = (
-    "Я работаю только с подписками на каналы.\n"
-    "По другим темам не отвечаю."
+    "Я работаю только с подписками на каналы и не отвечаю на другие темы.\n"
+    "Перешли пост из канала, чтобы подписаться, или напиши \"что нового\"."
 )
 
 
@@ -93,7 +95,11 @@ async def _start_flow_with_channel(event, client, channel_entity, mode):
     sender = await event.get_sender()
     user_id = sender.id
     _set_state(user_id, step=STEP_IMMEDIATE, mode=mode, channel_entity=channel_entity)
-    await event.respond("Отправлять новые посты сразу? Ответьте: да / нет")
+    await event.respond(
+        f"Канал: {channel_entity.title}\n\n"
+        "Присылать новые посты из этого канала сразу, как они выходят?\n"
+        "Ответьте: да / нет"
+    )
 
 
 async def handle_message(event, client):
@@ -210,13 +216,14 @@ async def _finalize_subscription(event, client, user_id, top_n):
 
     if mode == "policy":
         await event.respond(
-            f"Политика обновлена: {channel['title']}\n"
+            f"Настройки обновлены: {channel['title']}\n"
             f"{format_policy_human(policy)}"
         )
     else:
         await event.respond(
             f"Подписка создана: {channel['title']}\n"
-            f"{format_policy_human(policy)}"
+            f"{format_policy_human(policy)}\n\n"
+            "Напиши \"посты\" или \"что нового\", чтобы получить лучшие посты."
         )
 
 
@@ -249,6 +256,8 @@ async def _handle_list_subscriptions(event):
         })
         lines.append(f"{idx}. {title} ({policy_text})")
 
+    lines.append("")
+    lines.append("Напишите \"отпиши от 2\" или \"присылай из 3 сразу\".")
     await event.respond("\n".join(lines))
 
 
@@ -270,9 +279,13 @@ async def _handle_free_text(event, client, text):
 
     if intent == "help" or intent == "unknown":
         if intent == "unknown":
-            await event.respond(f"{OFF_TOPIC_TEXT}\n\n{HELP_TEXT}")
+            await event.respond(OFF_TOPIC_TEXT)
         else:
             await show_main_menu(event)
+        return True
+
+    if intent == "subscribe":
+        await event.respond("Перешли мне любой пост из канала, на который хочешь подписаться.")
         return True
 
     if intent == "list":
@@ -288,7 +301,7 @@ async def _handle_free_text(event, client, text):
             await event.respond("Не вижу номер канала. Напишите, например: 'отпиши от канала 2'")
             return True
         if index < 1 or index > len(subscriptions):
-            await event.respond(f"Неверный номер канала: {index}. Введите /subscriptions, чтобы увидеть список.")
+            await event.respond(f"Неверный номер: {index}. Напиши \"мои подписки\", чтобы увидеть список.")
             return True
 
         sub = subscriptions[index - 1]

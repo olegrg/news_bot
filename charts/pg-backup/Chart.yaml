@@ -1,0 +1,4 @@
+apiVersion: v2
+name: pg-backup
+description: Daily PostgreSQL backup to S3-compatible storage
+version: 0.1.0
